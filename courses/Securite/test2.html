@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Command Injection dans Set-UID - A Xplains</title>
+    <link rel="stylesheet" href="claude-explains.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>COMMAND INJECTION DANS LES PROGRAMMES SET-UID</h1>
+            <p class="subtitle">Quand vos privilèges root deviennent l'arme de l'attaquant</p>
+            <div>
+                <span class="badge badge-danger"><span>CRITIQUE</span></span>
+                <span class="badge badge-warning"><span>SÉCURITÉ</span></span>
+                <span class="badge badge-warning"><span>LINUX</span></span>
+            </div>
+        </header>
+        
+        <nav class="navigation">
+            <button class="btn-primary active" data-section="intro"><span>Le Problème</span></button>
+            <button class="btn-primary" data-section="shell"><span>Le Shell</span></button>
+            <button class="btn-primary" data-section="attack"><span>L'Attaque</span></button>
+            <button class="btn-primary" data-section="defense"><span>Défense</span></button>
+            <button class="btn-primary" data-section="practice"><span>Pratique</span></button>
+        </nav>
+        
+        <main>
+            <!-- ============================================ -->
+            <!-- SECTION 1 : LE PROBLÈME -->
+            <!-- ============================================ -->
+            <section id="intro" class="section active">
+                <div class="content-box">
+                    <h2>🎯 Le Problème Fondamental</h2>
+                    
+                    <h3>Analogie du Monde Réel</h3>
+                    <p>Imagine que tu es un garde royal (programme Set-UID avec privilèges root). Un visiteur te donne un message écrit sur un papier : <span class="highlight">"Apporte ce courrier à Jean"</span>.</p>
+                    
+                    <p>Tu fais confiance au message et tu demandes à ton assistant (le shell) de faire la livraison. Mais le visiteur a été malin : le message dit en réalité :</p>
+                    
+                    <div class="code-block">
+                        <code>"Apporte ce courrier à Jean ; puis brûle le château ; puis ouvre les portes"</code>
+                    </div>
+                    
+                    <p>Ton assistant ne voit qu'une série d'instructions et les exécute <strong>toutes</strong>, avec <strong>tes privilèges de garde royal</strong>. Le château brûle, et c'est ta faute d'avoir fait confiance sans vérifier.</p>
+                    
+                    <div class="warning-box">
+                        <p><strong>C'est exactement ce qui se passe avec system() et les entrées utilisateur non vérifiées.</strong></p>
+                    </div>
+                </div>
+                
+                <div class="content-box">
+                    <h2>📋 Le Code Vulnérable</h2>
+                    
+                    <p>Analysons le code dangereux de ton cours :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// Programme Set-UID (s'exécute avec privilèges root)
+char command[256];
+sprintf(command, "/bin/mail %s", User_Input);
+system(command);</code>
+                    </div>
+                    
+                    <h3>Pourquoi c'est dangereux ?</h3>
+                    
+                    <p>Pour comprendre, il faut d'abord savoir <strong>ce que fait system()</strong>. Voici ce qui se passe en réalité quand tu appelles <code>system(command)</code> :</p>
+                    
+                    <div class="code-block">
+                        <code>// Ce que system() fait en coulisses :
+execl("/bin/sh", "sh", "-c", command, NULL);</code>
+                    </div>
+                    
+                    <p>Décortiquons :</p>
+                    <ul>
+                        <li><code>/bin/sh</code> : Lance un <strong>shell</strong> (interpréteur de commandes)</li>
+                        <li><code>-c</code> : Dit au shell "exécute la commande qui suit"</li>
+                        <li><code>command</code> : La chaîne qu'on a construite avec l'input utilisateur</li>
+                    </ul>
+                    
+                    <div class="warning-box">
+                        <p><strong>Le problème fondamental :</strong> On passe l'input utilisateur à un <span class="highlight">interpréteur</span> (le shell) qui va <span class="highlight">analyser et exécuter</span> tout ce qu'il trouve dedans.</p>
+                    </div>
+                </div>
+                
+                <div class="content-box">
+                    <h2>🤔 La Question Clé</h2>
+                    
+                    <p>Avant d'aller plus loin, pose-toi cette question :</p>
+                    
+                    <div class="simulator">
+                        <p><strong>Si l'utilisateur entre :</strong></p>
+                        <p><code>alice@example.com</code></p>
+                        <p><strong>Quelle commande sera exécutée ?</strong></p>
+                        <textarea id="question1" rows="2" placeholder="Écris la commande complète qui sera passée au shell..."></textarea>
+                        <button class="btn-primary" onclick="checkAnswer1()"><span>Vérifier</span></button>
+                        <div id="answer1" class="result" style="display:none;"></div>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- ============================================ -->
+            <!-- SECTION 2 : COMPRENDRE LE SHELL -->
+            <!-- ============================================ -->
+            <section id="shell" class="section">
+                <div class="content-box">
+                    <h2>🐚 Le Shell : L'Interpréteur qui Change Tout</h2>
+                    
+                    <h3>Qu'est-ce qu'un Shell ?</h3>
+                    
+                    <p>Le shell (<code>/bin/sh</code>, <code>/bin/bash</code>, etc.) n'est pas un simple exécuteur de commandes. C'est un <strong>langage de programmation complet</strong> avec sa propre syntaxe et ses propres règles.</p>
+                    
+                    <p>Quand tu passes une commande au shell, il :</p>
+                    <ol>
+                        <li><strong>Parse</strong> (analyse) la chaîne de caractères</li>
+                        <li>Identifie les <strong>opérateurs spéciaux</strong> (comme <code>;</code>, <code>|</code>, <code>&</code>)</li>
+                        <li>Sépare en <strong>commandes distinctes</strong></li>
+                        <li>Exécute chaque commande dans l'ordre</li>
+                    </ol>
+                </div>
+                
+                <div class="content-box">
+                    <h2>⚡ Les Caractères Magiques du Shell</h2>
+                    
+                    <p>Voici les caractères qui transforment une simple commande en exploit potentiel :</p>
+                    
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th>Caractère</th>
+                                <th>Nom</th>
+                                <th>Effet</th>
+                                <th>Exemple</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>;</code></td>
+                                <td>Point-virgule</td>
+                                <td>Séparateur de commandes</td>
+                                <td><code>cmd1 ; cmd2</code> exécute cmd1 puis cmd2</td>
+                            </tr>
+                            <tr>
+                                <td><code>|</code></td>
+                                <td>Pipe</td>
+                                <td>Redirige sortie → entrée</td>
+                                <td><code>cmd1 | cmd2</code> envoie sortie de cmd1 à cmd2</td>
+                            </tr>
+                            <tr>
+                                <td><code>&</code></td>
+                                <td>Esperluette</td>
+                                <td>Exécution en arrière-plan</td>
+                                <td><code>cmd &</code> lance cmd en background</td>
+                            </tr>
+                            <tr>
+                                <td><code>&&</code></td>
+                                <td>ET logique</td>
+                                <td>cmd2 si cmd1 réussit</td>
+                                <td><code>cmd1 && cmd2</code> exécute cmd2 seulement si cmd1 OK</td>
+                            </tr>
+                            <tr>
+                                <td><code>||</code></td>
+                                <td>OU logique</td>
+                                <td>cmd2 si cmd1 échoue</td>
+                                <td><code>cmd1 || cmd2</code> exécute cmd2 si cmd1 plante</td>
+                            </tr>
+                            <tr>
+                                <td><code>&lt;</code></td>
+                                <td>Redirection entrée</td>
+                                <td>Lit depuis un fichier</td>
+                                <td><code>cmd &lt; file.txt</code> utilise file.txt comme entrée</td>
+                            </tr>
+                            <tr>
+                                <td><code>&gt;</code></td>
+                                <td>Redirection sortie</td>
+                                <td>Écrit dans un fichier</td>
+                                <td><code>cmd &gt; file.txt</code> écrase file.txt avec la sortie</td>
+                            </tr>
+                            <tr>
+                                <td><code>$(...)</code></td>
+                                <td>Substitution</td>
+                                <td>Exécute et remplace</td>
+                                <td><code>echo $(whoami)</code> affiche le nom d'utilisateur</td>
+                            </tr>
+                            <tr>
+                                <td><code>`...`</code></td>
+                                <td>Backticks</td>
+                                <td>Substitution (ancienne)</td>
+                                <td><code>echo `date`</code> affiche la date</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <div class="warning-box">
+                        <p><strong>Tous ces caractères sont interprétés par le shell AVANT que la commande principale ne s'exécute.</strong> C'est là que réside le danger.</p>
+                    </div>
+                </div>
+                
+                <div class="content-box">
+                    <h2>🎮 Simulateur : Comprendre le Parsing du Shell</h2>
+                    
+                    <div class="simulator">
+                        <p>Entre une commande avec des caractères spéciaux et vois comment le shell la découpe :</p>
+                        
+                        <div class="input-group">
+                            <label for="shellInput">Commande :</label>
+                            <input type="text" id="shellInput" value="echo hello ; whoami ; ls -la" placeholder="Exemple : cmd1 ; cmd2 | cmd3">
+                        </div>
+                        
+                        <button class="btn-primary" onclick="parseShellCommand()"><span>Analyser</span></button>
+                        
+                        <div id="shellParse" class="result safe" style="display:none;"></div>
+                    </div>
+                </div>
+            </section>
+            
+            <!-- ============================================ -->
+            <!-- SECTION 3 : L'ATTAQUE EXPLIQUÉE -->
+            <!-- ============================================ -->
+            <section id="attack" class="section">
+                <div class="content-box">
+                    <h2>💣 L'Attaque : Décortiquons l'Exploit</h2>
+                    
+                    <h3>Le Payload de l'Attaquant</h3>
+                    
+                    <p>Revenons au code vulnérable et à l'input malveillant de ton cours :</p>
+                    
+                    <div class="code-block">
+                        <code>User_Input = "xyz@example.com ; rm -f /* ; /bin/sh"</code>
+                    </div>
+                    
+                    <p>Maintenant, suivons <strong>pas à pas</strong> ce qui va se passer.</p>
+                </div>
+                
+                <div class="content-box">
+                    <h2>🔍 Étape 1 : Construction de la Commande</h2>
+                    
+                    <div class="code-block">
+                        <code>sprintf(command, "/bin/mail %s", User_Input);</code>
+                    </div>
+                    
+                    <p>Après cette ligne, <code>command</code> contient :</p>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>/bin/mail xyz@example.com ; rm -f /* ; /bin/sh</code>
+                    </div>
+                    
+                    <p><strong>Remarque importante :</strong> À ce stade, c'est juste une chaîne de caractères. Rien de dangereux... encore.</p>
+                </div>
+                
+                <div class="content-box">
+                    <h2>🔍 Étape 2 : Appel de system()</h2>
+                    
+                    <div class="code-block">
+                        <code>system(command);</code>
+                    </div>
+                    
+                    <p>Rappelle-toi, <code>system()</code> fait ceci en interne :</p>
+                    
+                    <div class="code-block">
+                        <code>execl("/bin/sh", "sh", "-c", "/bin/mail xyz@example.com ; rm -f /* ; /bin/sh", NULL);</code>
+                    </div>
+                    
+                    <p>On lance donc un <strong>shell</strong> avec l'argument <code>-c</code> suivi de notre commande complète.</p>
+                </div>
+                
+                <div class="content-box">
+                    <h2>🔍 Étape 3 : Le Shell Parse la Commande</h2>
+                    
+                    <p>Le shell reçoit la chaîne et voit le caractère <code>;</code>. Il découpe donc en <strong>trois commandes distinctes</strong> :</p>
+                    
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Commande</th>
+                                <th>Effet</th>
+                                <th>Privilèges</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>1</td>
+                                <td><code>/bin/mail xyz@example.com</code></td>
+                                <td>Envoie un mail (comportement normal)</td>
+                                <td><span class="badge badge-danger"><span>ROOT</span></span></td>
+                            </tr>
+                            <tr>
+                                <td>2</td>
+                                <td><code>rm -f /*</code></td>
+                                <td><strong>Supprime TOUS les fichiers du système</strong></td>
+                                <td><span class="badge badge-danger"><span>ROOT</span></span></td>
+                            </tr>
+                            <tr>
+                                <td>3</td>
+                                <td><code>/bin/sh</code></td>
+                                <td>Ouvre un shell interactif</td>
+                                <td><span class="badge badge-danger"><span>ROOT</span></span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <div class="warning-box">
+                        <p><strong>CATASTROPHE :</strong> Toutes ces commandes s'exécutent avec les privilèges du programme Set-UID, c'est-à-dire <span class="highlight">root</span>.</p>
+                    </div>
+                </div>
+                
+                <div class="content-box">
+                    <h2>🎯 Pourquoi C'est Si Grave ?</h2>
+                    
+                    <p>Analyse les conséquences :</p>
+                    
+                    <ul>
+                        <li><strong>Commande 1</strong> : L'email part normalement (ou échoue, peu importe)</li>
+                        <li><strong>Commande 2</strong> : <code>rm -f /*</code> avec privilèges root = <span class="highlight">destruction du système</span>
+                            <ul>
+                                <li><code>-f</code> : Force la suppression sans demander confirmation</li>
+                                <li><code>/*</code> : Tous les fichiers à la racine (/, /etc, /bin, /home, etc.)</li>
+                                <li>Avec root : aucune protection, tout est supprimé</li>
+                            </ul>
+                        </li>
+                        <li><strong>Commande 3</strong> : <code>/bin/sh</code> ouvre un shell interactif <strong>en tant que root</strong>
+                            <ul>
+                                <li>L'attaquant contrôle maintenant totalement le système</li>
+                                <li>Il peut créer des backdoors, voler des données, etc.</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+                
+                <div class="content-box">
+                    <h2>🎮 Simulateur : Construis Ton Propre Payload</h2>
+                    
+                    <div class="simulator">
+                        <p>Essaie de créer un input malveillant pour exécuter la commande <code>cat /etc/passwd</code> (afficher les utilisateurs du système) :</p>
+                        
+                        <div class="input-group">
+                            <label for="maliciousInput">User_Input :</label>
+                            <input type="text" id="maliciousInput" placeholder="victim@mail.com ; ??? ">
+                        </div>
+                        
+                        <button class="btn-primary" onclick="testPayload()"><span>Tester</span></button>
+                        
+                        <div id="payloadResult" class="result" style="display:none;"></div>
+                    </div>
+                    
+                    <p style="margin-top: 20px;"><strong>Indice :</strong> Tu veux que le shell exécute <code>/bin/mail [ton_input]</code>, puis <code>cat /etc/passwd</code>. Comment séparer ces deux commandes ?</p>
+                </div>
+            </section>
+            
+            <!-- ============================================ -->
+            <!-- SECTION 4 : DÉFENSES -->
+            <!-- ============================================ -->
+            <section id="defense" class="section">
+                <div class="content-box">
+                    <h2>🛡️ Comment Se Défendre ?</h2>
+                    
+                    <h3>Règle d'Or</h3>
+                    
+                    <div class="warning-box">
+                        <p><strong>NE JAMAIS passer d'input utilisateur à un interpréteur (shell, SQL, etc.) sans validation stricte.</strong></p>
+                    </div>
+                </div>
+                
+                <div class="content-box">
+                    <h2>❌ Mauvaises Solutions (Pourquoi Elles Échouent)</h2>
+                    
+                    <h3>1. Filtrer les Caractères Dangereux</h3>
+                    
+                    <div class="code-block">
+                        <code>// MAUVAISE IDÉE
+if (strchr(User_Input, ';') || strchr(User_Input, '|')) {
+    printf("Caractères interdits !\n");
+    exit(1);
+}</code>
+                    </div>
+                    
+                    <p><strong>Pourquoi ça échoue :</strong></p>
+                    <ul>
+                        <li>Il y a <strong>des dizaines</strong> de caractères spéciaux (<code>&</code>, <code>`</code>, <code>$</code>, <code>&lt;</code>, <code>&gt;</code>, <code>\n</code>, etc.)</li>
+                        <li>Facile d'en oublier un</li>
+                        <li>Principe de sécurité : <span class="highlight">liste noire = toujours contournable</span></li>
+                    </ul>
+                    
+                    <h3>2. Échapper les Caractères</h3>
+                    
+                    <div class="code-block">
+                        <code>// MIEUX, mais toujours dangereux
+char* escaped = escape_shell_arg(User_Input);
+sprintf(command, "/bin/mail %s", escaped);
+system(command);</code>
+                    </div>
+                    
+                    <p><strong>Pourquoi c'est risqué :</strong></p>
+                    <ul>
+                        <li>Dépend de l'implémentation de <code>escape_shell_arg()</code></li>
+                        <li>Un oubli = exploit possible</li>
+                        <li>Différents shells = différentes règles d'échappement</li>
+                    </ul>
+                </div>
+                
+                <div class="content-box">
+                    <h2>✅ Bonnes Solutions</h2>
+                    
+                    <h3>Solution 1 : Ne PAS utiliser system() - Utiliser execve()</h3>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// SÉCURISÉ : Pas de shell intermédiaire
+char *args[] = {"/bin/mail", User_Input, NULL};
+execve("/bin/mail", args, NULL);</code>
+                    </div>
+                    
+                    <p><strong>Pourquoi c'est sûr :</strong></p>
+                    <ul>
+                        <li><code>execve()</code> appelle <strong>directement</strong> le programme <code>/bin/mail</code></li>
+                        <li><strong>Aucun shell</strong> n'est invoqué → pas d'interprétation</li>
+                        <li><code>User_Input</code> est passé comme un <strong>argument unique</strong>, pas comme du code</li>
+                        <li>Même si <code>User_Input</code> contient <code>;</code>, c'est traité comme du texte littéral</li>
+                    </ul>
+                    
+                    <div class="warning-box">
+                        <p><strong>Différence clé :</strong> Avec <code>system()</code>, tu dis "exécute cette <span class="highlight">commande</span>". Avec <code>execve()</code>, tu dis "lance ce <span class="highlight">programme</span> avec ces <span class="highlight">arguments</span>".</p>
+                    </div>
+                    
+                    <h3>Solution 2 : Liste Blanche (Validation Stricte)</h3>
+                    
+                    <div class="code-block">
+                        <button class="copy-btn" onclick="copyCode(this)"><span>Copier</span></button>
+                        <code>// Accepte UNIQUEMENT des emails valides
+bool is_valid_email(char* input) {
+    // Regex ou validation manuelle :
+    // - Lettres, chiffres, @, ., -, _ uniquement
+    // - Format name@domain.tld
+    for (int i = 0; input[i] != '\0'; i++) {
+        char c = input[i];
+        if (!isalnum(c) && c != '@' && c != '.' && c != '-' && c != '_') {
+            return false; // Caractère interdit
+        }
+    }
+    return true; // OK
+}
+
+if (!is_valid_email(User_Input)) {
+    fprintf(stderr, "Email invalide\n");
+    exit(1);
+}
+// Maintenant, on peut utiliser User_Input (mais préférer execve() quand même)</code>
+                    </div>
+                    
+                    <p><strong>Principe :</strong> Accepte seulement ce qui est <span class="highlight">explicitement autorisé</span>, refuse tout le reste.</p>
+                    
+                    <h3>Solution 3 : Limiter les Privilèges (Defense in Depth)</h3>
+                    
+                    <div class="code-block">
+                        <code>// Réduire les privilèges avant l'opération dangereuse
+setuid(getuid()); // Passe en utilisateur normal
+system(command);  // Même si exploité, pas de privilèges root</code>
+                    </div>
+                    
+                    <p><strong>Idée :</strong> Si tu n'as pas besoin de privilèges root pour cette opération, ne les garde pas.</p>
+                </div>
+                
+                <div class="content-box">
+                    <h2>📊 Comparaison des Approches</h2>
+                    
+                    <table class="comparison-table">
+                        <thead>
+                            <tr>
+                                <th>Approche</th>
+                                <th>Sécurité</th>
+                                <th>Complexité</th>
+                                <th>Recommandation</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>system()</code> direct</td>
+                                <td><span class="badge badge-danger"><span>DANGER</span></span></td>
+                                <td>Simple</td>
+                                <td><strong>Ne JAMAIS utiliser avec input utilisateur</strong></td>
+                            </tr>
+                            <tr>
+                                <td>Filtrage liste noire</td>
+                                <td><span class="badge badge-warning"><span>RISQUÉ</span></span></td>
+                                <td>Moyenne</td>
+                                <td>Éviter, trop d'erreurs possibles</td>
+                            </tr>
+                            <tr>
+                                <td>Échappement shell</td>
+                                <td><span class="badge badge-warning"><span>RISQUÉ</span></span></td>
+                                <td>Moyenne</td>
+                                <td>Acceptable si bien fait, mais préférer execve()</td>
+                            </tr>
+                            <tr>
+                                <td>Liste blanche</td>
+                                <td><span class="badge badge-success"><span>BON</span></span></td>
+                                <td>Moyenne</td>
+                                <td>Bonne défense en profondeur</td>
+                            </tr>
+                            <tr>
+                                <td><code>execve()</code> direct</td>
+                                <td><span class="badge badge-success"><span>EXCELLENT</span></span></td>
+                                <td>Simple</td>
+                                <td><strong>Meilleure solution</strong></td>
+                            </tr>
+                            <tr>
+                                <td>Drop privileges</td>
+                                <td><span class="badge badge-success"><span>BON</span></span></td>
+                                <td>Simple</td>
+                                <td>À combiner avec les autres</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            
+            <!-- ============================================ -->
+            <!-- SECTION 5 : PRATIQUE -->
+            <!-- ============================================ -->
+            <section id="practice" class="section">
+                <div class="content-box">
+                    <h2>🎯 Challenge Final</h2>
+                    
+                    <h3>Exercice 1 : Identifier la Vulnérabilité</h3>
+                    
+                    <div class="code-block">
+                        <code>// Code A
+char cmd[256];
+snprintf(cmd, sizeof(cmd), "ping -c 1 %s", hostname);
+system(cmd);
+
+// Code B
+char *args[] = {"ping", "-c", "1", hostname, NULL};
+execve("/bin/ping", args, NULL);
+
+// Code C
+if (strstr(hostname, ";") == NULL) {
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "ping -c 1 %s", hostname);
+    system(cmd);
+}</code>
+                    </div>
+                    
+                    <div class="simulator">
+                        <p><strong>Question :</strong> Quel(s) code(s) est/sont vulnérable(s) à une command injection ?</p>
+                        
+                        <label><input type="checkbox" id="q1a"> Code A</label><br>
+                        <label><input type="checkbox" id="q1b"> Code B</label><br>
+                        <label><input type="checkbox" id="q1c"> Code C</label><br>
+                        
+                        <button class="btn-primary" onclick="checkExercise1()"><span>Vérifier</span></button>
+                        <div id="ex1Result" class="result" style="display:none;"></div>
+                    </div>
+                </div>
+                
+                <div class="content-box">
+                    <h3>Exercice 2 : Créer un Exploit</h3>
+                    
+                    <p>Tu as accès à un programme Set-UID qui exécute :</p>
+                    
+                    <div class="code-block">
+                        <code>sprintf(cmd, "cat %s", filename);
+system(cmd);</code>
+                    </div>
+                    
+                    <div class="simulator">
+                        <p><strong>Mission :</strong> Crée un <code>filename</code> qui affiche le contenu de <code>/etc/shadow</code> (fichiers des mots de passe) au lieu du fichier demandé.</p>
+                        
+                        <div class="input-group">
+                            <label for="ex2Input">filename :</label>
+                            <input type="text" id="ex2Input" placeholder="Ton payload ici...">
+                        </div>
+                        
+                        <button class="btn-primary" onclick="checkExercise2()"><span>Tester</span></button>
+                        <div id="ex2Result" class="result" style="display:none;"></div>
+                    </div>
+                    
+                    <p style="margin-top: 20px;"><strong>Indice :</strong> Tu veux que <code>cat</code> lise d'abord un fichier innocent, puis qu'une autre commande s'exécute...</p>
+                </div>
+                
+                <div class="content-box">
+                    <h3>Exercice 3 : Corriger le Code</h3>
+                    
+                    <p>Voici un code vulnérable. Réécris-le de manière sécurisée en utilisant <code>execve()</code> :</p>
+                    
+                    <div class="code-block">
+                        <code>// Code vulnérable
+char command[512];
+sprintf(command, "ls -la %s", directory);
+system(command);</code>
+                    </div>
+                    
+                    <div class="simulator">
+                        <p><strong>Ton code sécurisé :</strong></p>
+                        <textarea id="ex3Code" rows="5" placeholder="Réécris le code avec execve()...">char *args[] = {</textarea>
+                        <button class="btn-primary" onclick="checkExercise3()"><span>Vérifier</span></button>
+                        <div id="ex3Result" class="result" style="display:none;"></div>
+                    </div>
+                </div>
+                
+                <div class="content-box">
+                    <h2>🎓 Points Clés à Retenir</h2>
+                    
+                    <ul>
+                        <li><strong>system() = danger</strong> : Passe toujours par un shell qui interprète les caractères spéciaux</li>
+                        <li><strong>Le shell est un interpréteur</strong> : <code>;</code>, <code>|</code>, <code>&</code>, etc. sont des opérateurs de son langage</li>
+                        <li><strong>Privilèges + Injection = Catastrophe</strong> : Set-UID + system() + user input = accès root pour l'attaquant</li>
+                        <li><strong>execve() est ton ami</strong> : Pas de shell = pas d'interprétation = pas d'injection</li>
+                        <li><strong>Liste blanche > liste noire</strong> : Définis ce qui est autorisé, pas ce qui est interdit</li>
+                        <li><strong>Defense in depth</strong> : Combine plusieurs protections (validation + execve() + drop privileges)</li>
+                    </ul>
+                </div>
+                
+                <div class="content-box">
+                    <h2>✅ Checklist de Compréhension</h2>
+                    
+                    <p>Tu as vraiment compris si tu peux répondre à ces questions :</p>
+                    
+                    <ol>
+                        <li>Pourquoi <code>system()</code> est-il plus dangereux que <code>execve()</code> ?</li>
+                        <li>Qu'est-ce qu'un "caractère spécial du shell" et pourquoi est-il dangereux ?</li>
+                        <li>Comment le point-virgule (<code>;</code>) permet-il d'exécuter plusieurs commandes ?</li>
+                        <li>Pourquoi un programme Set-UID rend l'injection de commande critique ?</li>
+                        <li>Pourquoi une liste noire de caractères est-elle insuffisante ?</li>
+                        <li>Comment <code>execve()</code> empêche-t-il l'injection ?</li>
+                    </ol>
+                    
+                    <div class="warning-box">
+                        <p><strong>Test ultime :</strong> Explique ce problème à quelqu'un qui ne connaît pas la sécurité informatique, en utilisant uniquement des analogies du monde réel. Si tu y arrives, tu as vraiment compris.</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    
+    <script src="claude-explains.min.js"></script>
+    
+    <script>
+        // ============================================
+        // FONCTIONS SPÉCIFIQUES À CE COURS
+        // ============================================
+        
+        // Question 1 : Quelle commande sera exécutée ?
+        function checkAnswer1() {
+            const answer = document.getElementById('question1').value.trim();
+            const result = document.getElementById('answer1');
+            
+            const expected = "/bin/mail alice@example.com";
+            
+            if (answer.toLowerCase().includes("/bin/mail") && answer.includes("alice@example.com")) {
+                result.className = "result safe";
+                result.innerHTML = `
+                    <p><strong>✅ Correct !</strong></p>
+                    <p>La commande complète sera :</p>
+                    <code>/bin/mail alice@example.com</code>
+                    <p>Le shell exécute cette commande <strong>sans problème</strong> car l'input ne contient aucun caractère spécial.</p>
+                    <p><strong>Maintenant, imagine si l'utilisateur entre :</strong> <code>alice@example.com ; rm -rf /</code></p>
+                `;
+            } else {
+                result.className = "result";
+                result.innerHTML = `
+                    <p><strong>❌ Pas tout à fait.</strong></p>
+                    <p><strong>Rappel :</strong> Le code fait <code>sprintf(command, "/bin/mail %s", User_Input)</code></p>
+                    <p>Si <code>User_Input = "alice@example.com"</code>, alors <code>command</code> devient quoi ?</p>
+                `;
+            }
+            
+            result.style.display = "block";
+        }
+        
+        // Simulateur de parsing du shell
+        function parseShellCommand() {
+            const input = document.getElementById('shellInput').value;
+            const result = document.getElementById('shellParse');
+            
+            // Simulation simple du parsing
+            const commands = input.split(/([;|&])/).filter(s => s.trim() !== '');
+            
+            let html = '<p><strong>Analyse du shell :</strong></p>';
+            html += '<ol style="text-align: left;">';
+            
+            let currentCmd = '';
+            commands.forEach((part, idx) => {
+                if ([';', '|', '&'].includes(part.trim())) {
+                    if (currentCmd.trim()) {
+                        html += `<li><code>${currentCmd.trim()}</code></li>`;
+                        currentCmd = '';
+                    }
+                    html += `<li><strong>Opérateur :</strong> <code>${part}</code> → ${getOperatorDesc(part)}</li>`;
+                } else {
+                    currentCmd += part;
+                }
+            });
+            
+            if (currentCmd.trim()) {
+                html += `<li><code>${currentCmd.trim()}</code></li>`;
+            }
+            
+            html += '</ol>';
+            html += '<p><strong>Le shell exécutera chaque commande dans l\'ordre !</strong></p>';
+            
+            result.innerHTML = html;
+            result.style.display = "block";
+        }
+        
+        function getOperatorDesc(op) {
+            const descriptions = {
+                ';': 'Séparateur (exécute la commande suivante)',
+                '|': 'Pipe (redirige sortie → entrée)',
+                '&': 'Background (exécute en arrière-plan)'
+            };
+            return descriptions[op] || '';
+        }
+        
+        // Test de payload
+        function testPayload() {
+            const input = document.getElementById('maliciousInput').value;
+            const result = document.getElementById('payloadResult');
+            
+            const fullCommand = `/bin/mail ${input}`;
+            
+            if (input.includes(';') && input.toLowerCase().includes('cat') && input.includes('/etc/passwd')) {
+                result.className = "result";
+                result.innerHTML = `
+                    <p><strong>💣 Payload valide !</strong></p>
+                    <p><strong>Commande complète exécutée :</strong></p>
+                    <code>${fullCommand}</code>
+                    <p><strong>Le shell découpe en :</strong></p>
+                    <ol style="text-align: left;">
+                        <li><code>/bin/mail ${input.split(';')[0].trim()}</code></li>
+                        <li><code>${input.split(';').slice(1).join(';').trim()}</code></li>
+                    </ol>
+                    <p>✅ Tu as compris le principe ! L'attaquant peut exécuter n'importe quelle commande avec les privilèges du programme Set-UID.</p>
+                `;
+            } else if (input.includes(';')) {
+                result.className = "result";
+                result.innerHTML = `
+                    <p><strong>🤔 Presque !</strong></p>
+                    <p>Tu as bien utilisé <code>;</code> pour séparer les commandes, mais la deuxième commande n'affiche pas <code>/etc/passwd</code>.</p>
+                    <p><strong>Indice :</strong> Quelle commande Linux affiche le contenu d'un fichier ?</p>
+                `;
+            } else {
+                result.className = "result";
+                result.innerHTML = `
+                    <p><strong>❌ Pas encore ça.</strong></p>
+                    <p><strong>Rappel :</strong> Tu veux exécuter <strong>deux commandes</strong> :</p>
+                    <ol style="text-align: left;">
+                        <li><code>/bin/mail [quelque chose]</code></li>
+                        <li><code>cat /etc/passwd</code></li>
+                    </ol>
+                    <p>Comment séparer deux commandes en shell ? 🤔</p>
+                `;
+            }
+            
+            result.style.display = "block";
+        }
+        
+        // Exercice 1
+        function checkExercise1() {
+            const a = document.getElementById('q1a').checked;
+            const b = document.getElementById('q1b').checked;
+            const c = document.getElementById('q1c').checked;
+            const result = document.getElementById('ex1Result');
+            
+            if (a && !b && c) {
+                result.className = "result safe";
+                result.innerHTML = `
+                    <p><strong>✅ Parfait !</strong></p>
+                    <ul style="text-align: left;">
+                        <li><strong>Code A :</strong> Vulnérable (system() + input utilisateur)</li>
+                        <li><strong>Code B :</strong> Sécurisé (execve() sans shell)</li>
+                        <li><strong>Code C :</strong> Vulnérable ! Même avec le filtre sur <code>;</code>, plein d'autres caractères existent : <code>|</code>, <code>&</code>, <code>\`</code>, <code>$(...)</code>, etc.</li>
+                    </ul>
+                    <p><strong>Leçon :</strong> Liste noire = toujours contournable !</p>
+                `;
+            } else {
+                result.className = "result";
+                result.innerHTML = `
+                    <p><strong>❌ Pas tout à fait.</strong></p>
+                    <p><strong>Analyse :</strong></p>
+                    <ul style="text-align: left;">
+                        <li><strong>Code A :</strong> Utilise system() avec input utilisateur → ${a ? '✅' : '❌'}</li>
+                        <li><strong>Code B :</strong> Utilise execve() (pas de shell) → ${b ? '❌ (pas vulnérable !)' : '✅'}</li>
+                        <li><strong>Code C :</strong> Filtre juste <code>;</code>, mais qu'en est-il de <code>|</code>, <code>&</code>, <code>\`</code> ? → ${c ? '✅' : '❌'}</li>
+                    </ul>
+                `;
+            }
+            
+            result.style.display = "block";
+        }
+        
+        // Exercice 2
+        function checkExercise2() {
+            const input = document.getElementById('ex2Input').value.trim();
+            const result = document.getElementById('ex2Result');
+            
+            if ((input.includes(';') || input.includes('|') || input.includes('`')) && 
+                input.toLowerCase().includes('/etc/shadow')) {
+                result.className = "result";
+                result.innerHTML = `
+                    <p><strong>💣 Exploit réussi !</strong></p>
+                    <p><strong>Commande exécutée :</strong></p>
+                    <code>cat ${input}</code>
+                    <p>Le shell interprétera les caractères spéciaux et exécutera les commandes que tu as injectées, avec les privilèges root du programme Set-UID !</p>
+                    <p><strong>Exemples de payloads valides :</strong></p>
+                    <ul style="text-align: left;">
+                        <li><code>/etc/hosts ; cat /etc/shadow</code></li>
+                        <li><code>/etc/hosts | cat /etc/shadow</code></li>
+                        <li><code>/dev/null ; cat /etc/shadow</code></li>
+                    </ul>
+                `;
+            } else {
+                result.className = "result";
+                result.innerHTML = `
+                    <p><strong>🤔 Pas encore...</strong></p>
+                    <p><strong>Rappel :</strong> Le code fait <code>cat ${input}</code></p>
+                    <p>Tu veux que le shell exécute aussi <code>cat /etc/shadow</code>. Comment injecter une deuxième commande ?</p>
+                    <p><strong>Indices :</strong> Pense aux opérateurs <code>;</code>, <code>|</code>, <code>&&</code>...</p>
+                `;
+            }
+            
+            result.style.display = "block";
+        }
+        
+        // Exercice 3
+        function checkExercise3() {
+            const code = document.getElementById('ex3Code').value.toLowerCase();
+            const result = document.getElementById('ex3Result');
+            
+            const hasExecve = code.includes('execve');
+            const hasArgs = code.includes('args') || code.includes('[');
+            const hasLs = code.includes('"ls"') || code.includes("'ls'");
+            const hasDirectory = code.includes('directory');
+            const noSystem = !code.includes('system');
+            
+            if (hasExecve && hasArgs && hasLs && hasDirectory && noSystem) {
+                result.className = "result safe";
+                result.innerHTML = `
+                    <p><strong>✅ Excellent !</strong></p>
+                    <p><strong>Solution correcte attendue :</strong></p>
+                    <pre><code>char *args[] = {"/bin/ls", "-la", directory, NULL};
+execve("/bin/ls", args, NULL);</code></pre>
+                    <p><strong>Pourquoi c'est sécurisé :</strong></p>
+                    <ul style="text-align: left;">
+                        <li>Pas de <code>system()</code> → pas de shell</li>
+                        <li><code>directory</code> est passé comme un <strong>argument</strong>, pas comme du code</li>
+                        <li>Même si <code>directory</code> contient <code>;</code> ou <code>|</code>, c'est traité comme du texte littéral</li>
+                    </ul>
+                `;
+            } else {
+                result.className = "result";
+                let hints = [];
+                if (!hasExecve) hints.push("Utilise <code>execve()</code>, pas <code>system()</code>");
+                if (!hasArgs) hints.push("Crée un tableau <code>char *args[]</code>");
+                if (!hasLs) hints.push("Le premier élément doit être <code>\"/bin/ls\"</code>");
+                if (!hasDirectory) hints.push("N'oublie pas d'inclure la variable <code>directory</code>");
+                
+                result.innerHTML = `
+                    <p><strong>❌ Pas tout à fait.</strong></p>
+                    <p><strong>Indices :</strong></p>
+                    <ul style="text-align: left;">
+                        ${hints.map(h => `<li>${h}</li>`).join('')}
+                    </ul>
+                `;
+            }
+            
+            result.style.display = "block";
+        }
+    </script>
+</body>
+</html>
