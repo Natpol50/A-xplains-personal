@@ -5,7 +5,7 @@
 [![PHP Version](https://img.shields.io/badge/PHP-7.4%2B-blue)](https://www.php.net/)
 [![License Code](https://img.shields.io/badge/License%20(Code)-MIT-green)](LICENSE-CODE)
 [![License Content](https://img.shields.io/badge/License%20(Content)-CC%20BY--SA--NC%204.0-orange)](LICENSE-CONTENT)
-[![Status](https://img.shields.io/badge/Status-V1%20Stable-brightgreen)](https://github.com/yourusername/a-xplains)
+[![Status](https://img.shields.io/badge/Status-V00.00.02%20Stable-brightgreen)](https://github.com/yourusername/a-xplains)
 
 ## 🎯 Philosophy
 
@@ -172,7 +172,7 @@ a-xplains/
 
 ## ⚡ Performance Optimizations
 
-A-XPLAINS V1 includes several performance optimizations:
+A-XPLAINS V00.00.02 includes several performance optimizations:
 
 - **JSON metadata cache**: Courses are parsed once, cached for 1 hour
 - **Gzip compression**: Reduces bandwidth by ~80%
@@ -264,16 +264,17 @@ Add custom functions in a separate `<script>` block after importing the main JS.
 
 ## 🛣️ Roadmap
 
-### V1 (Current) - Stable
-- [x] Auto-discovery of courses
-- [x] Metadata extraction from HTML
-- [x] Category-based organization
-- [x] Search functionality
+### V1 (Current 00.00.02) - Nada
+- [x] Auto-discovery of courses (with very basic caching)
+- [x] Metadata extraction from HTML (needs fixing)
+- [x] Category-based organization (needs fixing on dynamic badges)
+- [x] Search functionality (needs optimisation)
 - [x] Secure file serving
-- [x] Unified design system
-- [x] Some Performance optimizations (caching, compression)
+- [x] allows for small exercices
+- [ ] Unified design system
+- [ ] Some Performance optimizations (caching, compression)
 
-### V2 (Maybe one day) - Better Contribution Workflow
+### V1/2 (Maybe one day) - Better Contribution Workflow
 - [ ] Web-based course editor (WYSIWYG or markdown)
 - [ ] Automated deployment pipeline
 - [ ] Version control integration
@@ -287,9 +288,9 @@ Add custom functions in a separate `<script>` block after importing the main JS.
 
 ## 🤝 Contributing
 
-### Current State (V1)
+### Current State (V00.00.02)
 
-V1 is intentionally simple and optimized for single-author use. The deployment workflow is manual and requires server access.
+V00.00.02 is intentionally simple and optimized for single-author use. The deployment workflow is manual and requires server access.
 
 **If you want to share a course:**
 
